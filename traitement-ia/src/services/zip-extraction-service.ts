@@ -7,10 +7,21 @@ import AdmZip from 'adm-zip';
 import logger from '../utils/logger.js';
 
 // Constants for limits
-const MAX_PDF_SIZE_BYTES = 20 * 1024 * 1024;  // 20 MB per PDF
-const MAX_TOTAL_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB total
+const MAX_PDF_SIZE_BYTES = 30 * 1024 * 1024;  // 30 MB per PDF
+const MAX_TOTAL_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB total
 const MAX_PDF_COUNT = 10;
 const MAX_DEPTH = 5;  // Maximum folder depth
+
+// System files/folders to ignore silently (not counted in report)
+const SYSTEM_PATTERNS = [
+  '__MACOSX',
+  '.DS_Store',
+  'Thumbs.db',
+  'desktop.ini',
+  '.Spotlight-',
+  '.Trashes',
+  '.fseventsd'
+];
 
 export interface ExtractedPdf {
   filename: string;
@@ -37,6 +48,13 @@ export interface ExtractionStats {
  */
 function isPdfFile(filename: string): boolean {
   return filename.toLowerCase().endsWith('.pdf');
+}
+
+/**
+ * Check if a path is a system file/folder to ignore silently
+ */
+function isSystemFile(fullPath: string): boolean {
+  return SYSTEM_PATTERNS.some(pattern => fullPath.includes(pattern));
 }
 
 /**
@@ -91,17 +109,17 @@ export function extractPdfsFromZip(zipBuffer: Buffer): ExtractionResult {
       // Skip directories
       if (entry.isDirectory) continue;
 
-      stats.totalFiles++;
       const fullPath = entry.entryName;
       const filename = getFilename(fullPath);
       const sourcePath = getDirectoryPath(fullPath);
       const depth = getPathDepth(fullPath);
 
-      // Skip hidden files (starting with .)
-      if (filename.startsWith('.')) {
-        stats.ignoredCount++;
+      // Skip system files silently (not counted)
+      if (isSystemFile(fullPath) || filename.startsWith('.')) {
         continue;
       }
+
+      stats.totalFiles++;
 
       // Skip if too deep in folder structure
       if (depth > MAX_DEPTH) {
@@ -136,7 +154,7 @@ export function extractPdfsFromZip(zipBuffer: Buffer): ExtractionResult {
 
         // Check individual file size
         if (size > MAX_PDF_SIZE_BYTES) {
-          logger.warn(`[ZIP] PDF too large: ${filename} (${(size / 1024 / 1024).toFixed(2)} MB > 20 MB)`);
+          logger.warn(`[ZIP] PDF too large: ${filename} (${(size / 1024 / 1024).toFixed(2)} MB > 30 MB)`);
           stats.errorCount++;
           continue;
         }
