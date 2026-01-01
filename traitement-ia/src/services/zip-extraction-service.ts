@@ -7,8 +7,9 @@ import AdmZip from 'adm-zip';
 import logger from '../utils/logger.js';
 
 // Constants for limits
-const MAX_PDF_SIZE_BYTES = 30 * 1024 * 1024;  // 30 MB per PDF
-const MAX_TOTAL_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB total
+// Note: PDFs > 20MB will be split by pdf-split-service during import
+const MAX_PDF_SIZE_BYTES = 200 * 1024 * 1024;  // 200 MB per PDF (will be split if > 20MB)
+const MAX_TOTAL_SIZE_BYTES = 500 * 1024 * 1024; // 500 MB total
 const MAX_PDF_COUNT = 10;
 const MAX_DEPTH = 5;  // Maximum folder depth
 
@@ -154,7 +155,7 @@ export function extractPdfsFromZip(zipBuffer: Buffer): ExtractionResult {
 
         // Check individual file size
         if (size > MAX_PDF_SIZE_BYTES) {
-          logger.warn(`[ZIP] PDF too large: ${filename} (${(size / 1024 / 1024).toFixed(2)} MB > 30 MB)`);
+          logger.warn(`[ZIP] PDF too large: ${filename} (${(size / 1024 / 1024).toFixed(2)} MB > ${MAX_PDF_SIZE_BYTES / 1024 / 1024} MB)`);
           stats.errorCount++;
           continue;
         }

@@ -10,6 +10,7 @@ import { extractPdfsFromZip, isZipFile, isZipFilename, formatExtractionStats, Ex
 import { documentExistsByHash, insertDocument, getDocumentByHash, updateDocument, DocumentInsert, DocumentMetadata } from '../persistence/database-service.js';
 import { loadLLMConfig } from '../utils/config-loader.js';
 import { getModelName, ModelLevel } from './flow-router.js';
+import { needsSplit, splitPdf, SplitPdfPart } from '../services/pdf-split-service.js';
 import logger from '../utils/logger.js';
 
 // Delay between API calls to avoid rate limiting (1 second)
@@ -33,6 +34,11 @@ export interface ImportedDocument {
   summary: string | null;
   isDuplicate: boolean;
   error?: string;
+  // Split info (only present if document was split)
+  wasSplit?: boolean;
+  partIndex?: number;
+  totalParts?: number;
+  pageRange?: string;  // e.g., "1-20"
 }
 
 export interface ImportStats {
@@ -41,6 +47,7 @@ export interface ImportStats {
   duplicates: number;
   errors: number;
   ignored: number;  // For ZIP: non-PDF files
+  splitParts: number;  // Number of parts from split PDFs
 }
 
 // Interface for indexation IA response
@@ -119,7 +126,8 @@ class ImportProcessor {
       imported: 0,
       duplicates: 0,
       errors: 0,
-      ignored: 0
+      ignored: 0,
+      splitParts: 0
     };
 
     const documents: ImportedDocument[] = [];
@@ -185,38 +193,104 @@ class ImportProcessor {
 
     logger.info(`[IMPORT] Processing ${pdfsToProcess.length} PDF(s)...`);
 
-    // Process each PDF
+    // Process each PDF (with potential splitting for large files)
+    let apiCallIndex = 0;
     for (let i = 0; i < pdfsToProcess.length; i++) {
       const pdf = pdfsToProcess[i];
 
-      // Add delay between API calls (except for the first one)
-      if (i > 0) {
-        await sleep(API_DELAY_MS);
-      }
+      // Check if PDF needs splitting (> 20MB)
+      if (needsSplit(pdf.buffer.length)) {
+        logger.info(`[IMPORT] Large PDF detected: ${pdf.filename} (${(pdf.buffer.length / 1024 / 1024).toFixed(1)} MB) - splitting...`);
 
-      const result = await this.processSinglePdf(
-        pdf.filename,
-        pdf.sourcePath,
-        pdf.buffer,
-        emailBody,
-        modelLevel
-      );
+        try {
+          const splitResult = await splitPdf(pdf.buffer, pdf.filename);
 
-      documents.push(result);
+          logger.info(`[IMPORT] Split into ${splitResult.parts.length} parts`);
+          stats.splitParts += splitResult.parts.length;
 
-      if (result.isDuplicate) {
-        stats.duplicates++;
-      } else if (result.error) {
-        stats.errors++;
+          // Process each part
+          for (const part of splitResult.parts) {
+            // Add delay between API calls
+            if (apiCallIndex > 0) {
+              await sleep(API_DELAY_MS);
+            }
+            apiCallIndex++;
+
+            const result = await this.processSinglePdf(
+              part.filename,
+              pdf.sourcePath,
+              part.buffer,
+              emailBody,
+              modelLevel
+            );
+
+            // Add split metadata
+            result.wasSplit = true;
+            result.partIndex = part.partIndex;
+            result.totalParts = part.totalParts;
+            result.pageRange = `${part.pageStart}-${part.pageEnd}`;
+
+            documents.push(result);
+
+            if (result.isDuplicate) {
+              stats.duplicates++;
+            } else if (result.error) {
+              stats.errors++;
+            } else {
+              stats.imported++;
+            }
+          }
+        } catch (splitError) {
+          const err = splitError as Error;
+          logger.error(`[IMPORT] Failed to split ${pdf.filename}: ${err.message}`);
+          documents.push({
+            filename: pdf.filename,
+            sourcePath: pdf.sourcePath || null,
+            title: null,
+            documentType: null,
+            subjects: [],
+            summary: null,
+            isDuplicate: false,
+            error: `Failed to split PDF: ${err.message}`
+          });
+          stats.errors++;
+        }
       } else {
-        stats.imported++;
+        // Normal processing for PDFs <= 20MB
+        // Add delay between API calls (except for the first one)
+        if (apiCallIndex > 0) {
+          await sleep(API_DELAY_MS);
+        }
+        apiCallIndex++;
+
+        const result = await this.processSinglePdf(
+          pdf.filename,
+          pdf.sourcePath,
+          pdf.buffer,
+          emailBody,
+          modelLevel
+        );
+
+        documents.push(result);
+
+        if (result.isDuplicate) {
+          stats.duplicates++;
+        } else if (result.error) {
+          stats.errors++;
+        } else {
+          stats.imported++;
+        }
       }
     }
 
     logger.info(`[IMPORT] Complete: ${stats.imported} imported, ${stats.duplicates} duplicates, ${stats.errors} errors`);
 
+    // Success if at least one document was imported or found as duplicate
+    // (duplicates mean the doc is already in the database = OK)
+    const hasResults = stats.imported > 0 || stats.duplicates > 0;
+
     return {
-      success: stats.errors === 0 || stats.imported > 0,
+      success: hasResults || stats.errors === 0,
       isZip,
       documents,
       stats
@@ -435,6 +509,9 @@ export function formatImportConfirmation(result: ImportResult): string {
     lines.push('');
     lines.push(`Documents importés : ${result.stats.imported}`);
 
+    if (result.stats.splitParts > 0) {
+      lines.push(`PDFs découpés : ${result.stats.splitParts} parties (fichiers > 20 MB)`);
+    }
     if (result.stats.duplicates > 0) {
       lines.push(`Documents existants (mis à jour) : ${result.stats.duplicates}`);
     }
@@ -445,7 +522,7 @@ export function formatImportConfirmation(result: ImportResult): string {
       lines.push(`Erreurs : ${result.stats.errors}`);
     }
   } else {
-    // Single PDF: detailed info
+    // Single PDF (or split into multiple parts)
     const doc = result.documents[0];
 
     if (!doc) {
@@ -453,10 +530,31 @@ export function formatImportConfirmation(result: ImportResult): string {
       if (result.error) {
         lines.push(`Raison: ${result.error}`);
       }
-    } else if (doc.error) {
+    } else if (doc.error && !doc.wasSplit) {
       lines.push('Échec de l\'import');
       lines.push(`Fichier : ${doc.filename}`);
       lines.push(`Erreur : ${doc.error}`);
+    } else if (result.stats.splitParts > 0) {
+      // PDF was split into multiple parts
+      lines.push('Document importé avec succès (découpé)');
+      lines.push('');
+      lines.push(`Fichier original : trop volumineux (> 20 MB)`);
+      lines.push(`Parties créées : ${result.stats.splitParts}`);
+      lines.push('');
+
+      // Show each part
+      for (const partDoc of result.documents) {
+        if (partDoc.error) {
+          lines.push(`- ${partDoc.filename} : ERREUR - ${partDoc.error}`);
+        } else if (partDoc.isDuplicate) {
+          lines.push(`- ${partDoc.filename} (pages ${partDoc.pageRange}) : déjà existant`);
+        } else {
+          lines.push(`- ${partDoc.filename} (pages ${partDoc.pageRange}) : importé`);
+          if (partDoc.title) {
+            lines.push(`  Titre : ${partDoc.title}`);
+          }
+        }
+      }
     } else {
       if (doc.isDuplicate) {
         lines.push('Document existant mis à jour');
