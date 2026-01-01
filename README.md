@@ -1,82 +1,8 @@
-# TempIAMail - Template
+# AskDocProjet
 
-Template pour creer des systemes de traitement IA lances par email.
+Systeme de Q&A documentaire par email. Importez vos documents PDF, posez des questions, recevez des reponses argumentees avec sources.
 
-## Utilisation du template
-
-### 1. Cloner le template
-
-```bash
-# Cloner dans un nouveau dossier
-git clone https://github.com/Xeanorts/TempIAMail.git MonProjet
-cd MonProjet
-
-# Supprimer l'historique git pour repartir de zero
-rm -rf .git
-git init
-```
-
-### 2. Renommer le projet
-
-Le template utilise des noms generiques faciles a rechercher/remplacer :
-
-| Placeholder | Format | Exemple de remplacement |
-|-------------|--------|-------------------------|
-| `projectname` | minuscules | `monprojet` |
-| `ProjectName` | PascalCase | `MonProjet` |
-| `Project Name` | Avec espace | `Mon Projet` |
-
-**Commandes de remplacement :**
-
-```bash
-# Remplacer dans tous les fichiers (Linux/Mac)
-find . -type f -not -path './.git/*' -exec sed -i 's/projectname/monprojet/g' {} +
-find . -type f -not -path './.git/*' -exec sed -i 's/ProjectName/MonProjet/g' {} +
-find . -type f -not -path './.git/*' -exec sed -i 's/Project Name/Mon Projet/g' {} +
-
-# Regenerer les package-lock.json
-cd reception-mail && rm package-lock.json && npm install && cd ..
-cd traitement-ia && rm package-lock.json && npm install && cd ..
-```
-
-**Fichiers principaux concernes :**
-
-| Fichier | Contenu a modifier |
-|---------|-------------------|
-| `docker-compose.yml` | Noms des conteneurs et network |
-| `package.json` (x4) | Nom et description des packages |
-| `deploy.sh` | Chemin de deploiement |
-| `traitement-ia/src/index.ts` | Noms des fonctions exportees |
-| `*.md` | Documentation |
-| `.env.example` | Commentaires |
-
-### 3. Configurer le projet
-
-```bash
-# Copier les fichiers de configuration
-cp .env.example .env
-cp config/whitelist.json.example config/whitelist.json
-cp traitement-ia/config/llm.json.example traitement-ia/config/llm.json
-cp traitement-ia/config/llm-pdf.json.example traitement-ia/config/llm-pdf.json
-
-# Editer la configuration
-nano .env
-nano config/whitelist.json
-```
-
-### 4. Deployer
-
-```bash
-./deploy.sh
-```
-
----
-
-## Description du systeme
-
-Assistant IA par email : repond aux questions avec ou sans documents PDF, utilisant l'API Mistral AI.
-
-### Fonctionnement
+## Fonctionnement
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
@@ -87,37 +13,96 @@ Assistant IA par email : repond aux questions avec ou sans documents PDF, utilis
                       ┌────────▼─────────┐
                       │  Traitement IA   │
                       │  (Mistral API)   │
-                      │  + Cache PDF     │
+                      │  + SQLite BDD    │
                       └──────────────────┘
 ```
 
-1. **Reception email** : Emails recus via IMAP (dossier configurable, polling 30s)
-2. **Whitelist** : Verification que l'expediteur est autorise
-3. **Traitement Mistral** :
-   - **Avec PDF** : Analyse du document, reponse basee uniquement sur son contenu
-   - **Sans PDF** : Reponse libre avec les connaissances generales de l'IA
-4. **Reponse** : Envoi de la reponse par email SMTP (PDFs renvoyes si presents)
-5. **Idempotence** : Chaque email traite une seule fois (tracking par ID)
+### Deux flux principaux
 
-### Architecture
+| Flux | Declencheur | Action |
+|------|-------------|--------|
+| **Import** | `(add)` dans l'objet | Indexe les PDFs/ZIPs dans la base documentaire |
+| **Question** | Objet sans `(add)` | Analyse les documents et repond a la question |
+
+---
+
+## Flux Import `(add)`
+
+Envoyez un email avec `(add)` dans l'objet + pieces jointes PDF ou ZIP.
+
+**Pipeline d'indexation :**
+1. Extraction des PDFs (ZIP decompresse recursivement)
+2. Decoupe automatique des gros PDFs (max 100 pages/part)
+3. Upload Mistral OCR
+4. Analyse IA : 5 appels API specialises par document
+   - Titre, Type, Sujets, Mots-cles, Resume
+5. Stockage metadonnees en SQLite
+6. Email de confirmation
+
+**Email de confirmation :**
+```
+✓ Import termine
+
+Archive : documentation-projet.zip
+
+Documents importes : 8
+Fichiers ignores : 3 (formats non supportes)
+Doublons : 1
+Erreurs : 0
+```
+
+---
+
+## Flux Question
+
+Envoyez un email avec votre question (sans `(add)` dans l'objet).
+
+**Pipeline Q&A (a venir) :**
+1. IA Pre-selection : choisit les documents pertinents
+2. IA Lectrices : extrait les informations de chaque document
+3. IA Compilatrice : synthetise une reponse argumentee
+
+**Reponse attendue :**
+```
+[Reponse detaillee]
+
+---
+Sources :
+- Cahier des charges v2, page 12 : "citation"
+- Specifications techniques, page 5 : "citation"
+
+Documents analyses : 3
+```
+
+---
+
+## Architecture
 
 ```
-projectname/
-├── orchestrator.js          # Orchestrateur principal (polling, whitelist, retry)
+AskDocProjet/
+├── orchestrator.js          # Orchestrateur principal
 ├── reception-mail/          # Module reception IMAP
 ├── traitement-ia/           # Module IA Mistral (TypeScript)
-│   └── config/llm.json      # Configuration du prompt LLM
+│   ├── src/
+│   │   ├── processors/      # Import, Question, Pre-selection...
+│   │   ├── services/        # Mistral, PDF-split, ZIP...
+│   │   └── persistence/     # SQLite database
+│   └── config/
+│       ├── llm-indexation-*.json  # Prompts indexation (5 fichiers)
+│       ├── llm-preselection.json  # Prompt pre-selection
+│       ├── llm-reader.json        # Prompt lectrice
+│       └── llm-compiler.json      # Prompt compilatrice
 ├── email-send/              # Module envoi SMTP
 ├── config/
-│   └── whitelist.json       # Liste des expediteurs autorises
+│   └── whitelist.json       # Expediteurs autorises
 ├── storage/
-│   ├── 00_mail_in/          # Emails entrants (JSON)
+│   ├── 00_mail_in/          # Emails entrants
 │   ├── 10_ia_requests/      # Resultats traitement
-│   ├── 11_pdf_cache/        # Cache PDF (SHA256 -> Mistral fileId)
-│   └── quarantine/          # Emails en erreur
-├── deploy.sh                # Script de deploiement
-├── docker-compose.yml       # Configuration Docker
-└── .env                     # Configuration (credentials)
+│   ├── 11_pdf_cache/        # Cache PDF Mistral
+│   └── 12_conversation_threads/
+├── data/
+│   └── askdoc.db            # Base SQLite documents
+└── docker-compose.yml
 ```
 
 ---
@@ -132,121 +117,45 @@ IMAP_HOST=ssl0.ovh.net
 IMAP_PORT=993
 IMAP_USER=votre-email@domain.com
 IMAP_PASSWORD=votre-mot-de-passe
-IMAP_MAILBOX=INBOX
-IMAP_SYNC_INTERVAL=30000
 
 # SMTP (envoi)
 SMTP_HOST=smtp.mail.ovh.net
 SMTP_PORT=465
-SMTP_SECURE=true
 SMTP_USER=votre-email@domain.com
 SMTP_PASSWORD=votre-mot-de-passe
 SMTP_FROM_EMAIL=votre-email@domain.com
-SMTP_FROM_NAME=Assistant IA
+SMTP_FROM_NAME=AskDoc
 
 # Mistral AI
 MISTRAL_API_KEY=votre-cle-api
-
-# Mode test (true = pas d'appels API reels)
-DRY_RUN=false
 ```
 
 ### Whitelist (config/whitelist.json)
 
 ```json
 {
-  "allowed_emails": [
-    "utilisateur@example.com",
-    "autre@example.com"
-  ],
-  "allowed_domains": []
+  "allowed_emails": ["utilisateur@example.com"],
+  "allowed_domains": ["example.com"]
 }
-```
-
-### Prompts LLM (traitement-ia/config/)
-
-Deux fichiers de prompts systeme :
-
-| Fichier | Usage |
-|---------|-------|
-| `llm.json` | Emails sans PDF (reponses libres) |
-| `llm-pdf.json` | Emails avec PDF (reponses basees sur le document) |
-
-```json
-{
-  "model": "mistral-small-latest",
-  "max_output_tokens": 4000,
-  "system_prompt": "Tu es un assistant IA professionnel..."
-}
-```
-
----
-
-## Commandes utiles
-
-```bash
-# Deployer
-./deploy.sh
-
-# Voir les logs
-cd /home/ubuntu/stacks/projectname && docker compose logs -f
-
-# Redemarrer
-./deploy.sh --restart
-
-# Status
-./deploy.sh --status
-
-# Sync config sans rebuild
-./deploy.sh --sync
-
-# Compiler le module TypeScript
-cd traitement-ia && npm run build
 ```
 
 ---
 
 ## Selection du modele IA
 
-Ajoutez un tag dans le sujet de l'email pour choisir le modele Mistral :
+Ajoutez un tag dans l'objet pour choisir le modele :
 
-| Tag dans le sujet | Modele | Description |
-|-------------------|--------|-------------|
-| _(aucun)_ | mistral-small | Rapide, economique (defaut) |
-| `(pro)` | mistral-medium | Equilibre qualite/cout |
+| Tag | Modele | Usage |
+|-----|--------|-------|
+| _(aucun)_ | mistral-small | Rapide, economique |
+| `(pro)` | mistral-medium | Meilleure qualite |
 | `(max)` | mistral-large | Qualite maximale |
 
 **Exemples :**
-- `Question sur mon contrat` → mistral-small (defaut)
-- `Question importante (pro)` → mistral-medium
-- `Analyse complexe (max)` → mistral-large
-
----
-
-## Fonctionnalites
-
-### Cache PDF intelligent
-
-Les PDFs sont caches par hash SHA256 :
-- Pas de re-upload sur Mistral si deja en cache
-- Pas de re-OCR
-- Reponse plus rapide
-- Expiration apres 7 jours d'inactivite
-
-### Idempotence
-
-Chaque email est traite une seule fois. En cas de crash/redemarrage, pas de double-reponse.
-
-### Retry avec backoff
-
-En cas d'erreur LLM : 3 tentatives (30s, 60s, 120s), puis quarantine.
-
-### Quarantine
-
-Emails problematiques deplaces dans `storage/quarantine/` :
-- Email vide
-- Expediteur invalide ou non whiteliste
-- Echec apres 3 tentatives
+- `Question sur le projet` → mistral-small
+- `(add) Documentation projet` → Import standard
+- `(pro) Analyse detaillee` → mistral-medium
+- `(add)(max) Contrats importants` → Import avec analyse maximale
 
 ---
 
@@ -254,33 +163,46 @@ Emails problematiques deplaces dans `storage/quarantine/` :
 
 | Limite | Valeur |
 |--------|--------|
-| Taille max par PDF | 20 MB |
-| Taille totale max | 20 MB |
-| Nombre max de PDFs | 10 |
-| Timeout LLM | 120s (configurable) |
-| Cache PDF | 7 jours d'inactivite |
+| Pages max par part PDF | 100 |
+| Taille max par PDF | 30 MB |
+| Nombre max de PDFs/email | 10 |
+| Timeout API | 120s |
+| Delai entre appels API | 1s |
 
 ---
 
-## Troubleshooting
-
-### Permission denied sur storage/
+## Deploiement
 
 ```bash
-sudo chmod -R 777 /home/ubuntu/stacks/projectname/storage/
+# Configuration
+cp .env.example .env
+cp config/whitelist.json.example config/whitelist.json
+nano .env
+
+# Deploiement
+docker compose up -d
+
+# Logs
+docker compose logs -f orchestrator
 ```
 
-### Email non recu
+---
 
-1. Verifier que l'expediteur est dans la whitelist
-2. Verifier que l'email n'a pas deja ete traite (`10_ia_requests/`)
-3. Verifier les logs IMAP : `docker compose logs reception-mail`
+## Commandes utiles
 
-### Pas de reponse
+```bash
+# Status
+docker compose ps
 
-1. Verifier `DRY_RUN=false` dans `.env`
-2. Verifier la cle API Mistral
-3. Verifier les logs : `docker compose logs orchestrator`
+# Logs temps reel
+docker compose logs -f
+
+# Rebuild complet
+docker compose build --no-cache && docker compose up -d
+
+# Verifier la base documentaire
+sqlite3 data/askdoc.db "SELECT filename, title, document_type FROM documents;"
+```
 
 ---
 

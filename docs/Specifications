@@ -447,3 +447,63 @@ Archive : documentation-projet-alpha.zip
 | Aucun document en BDD | Email "Aucun document dans la base" |
 | Aucun document pertinent | Email "Aucun document ne semble traiter de ce sujet" |
 | Erreur IA | Retry 1x, puis email d'erreur générique |
+
+---
+
+## 11. Avancement du développement
+
+### État actuel (01/01/2026)
+
+#### Phases terminées
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| **Phase 1** | Infrastructure SQLite | ✅ Terminé |
+| **Phase 2** | Routeur de flux (import/question) | ✅ Terminé |
+| **Phase 3** | Flux Import complet | ✅ Terminé |
+
+#### Détails Phase 3 - Flux Import
+
+**Fonctionnalités implémentées :**
+- Extraction ZIP récursive (tous sous-dossiers)
+- Découpage automatique des gros PDFs (max 100 pages/part)
+- Upload Mistral OCR avec gestion d'erreurs
+- Indexation IA avec 5 appels API spécialisés :
+  - `llm-indexation-title.json` : Extraction du titre
+  - `llm-indexation-type.json` : Classification du type de document
+  - `llm-indexation-subjects.json` : Extraction des sujets (3-5)
+  - `llm-indexation-keywords.json` : Extraction des mots-clés (8-15)
+  - `llm-indexation-summary.json` : Génération du résumé
+- Détection des doublons par hash SHA256
+- Email de confirmation avec statistiques
+- Délai 1s entre appels API (rate limiting)
+
+**Fichiers créés :**
+- `traitement-ia/src/persistence/database-service.ts`
+- `traitement-ia/src/services/zip-extraction-service.ts`
+- `traitement-ia/src/services/pdf-split-service.ts`
+- `traitement-ia/src/processors/flow-router.ts`
+- `traitement-ia/src/processors/import-processor.ts`
+- `traitement-ia/config/llm-indexation-*.json` (5 fichiers)
+
+**Améliorations techniques :**
+- Conteneur `init-permissions` pour uniformiser les droits
+- UID unifié (1000) entre reception-mail et orchestrator
+- Permissions 777 automatiques sur volumes partagés
+
+#### Phases à venir
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| **Phase 4** | Flux Question (pré-sélection, lectrices, compilatrice) | 🔜 À faire |
+| **Phase 5** | Système de niveaux de modèles | 🔜 À faire |
+| **Phase 6** | Gestion des erreurs avancée | 🔜 À faire |
+| **Phase 7** | Intégration finale et tests | 🔜 À faire |
+
+#### Prochaines étapes
+
+1. Implémenter `preselection-processor.ts`
+2. Implémenter `reader-processor.ts`
+3. Implémenter `compiler-processor.ts`
+4. Créer les prompts LLM associés
+5. Intégrer le flux Question dans l'orchestrateur
