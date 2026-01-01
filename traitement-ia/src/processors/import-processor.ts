@@ -74,34 +74,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-/**
- * Parse the indexation response from the LLM
- */
-function parseIndexationResponse(response: string): IndexationResponse | null {
-  try {
-    // Try to extract JSON from the response
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      logger.warn('No JSON found in indexation response');
-      return null;
-    }
-
-    const parsed = JSON.parse(jsonMatch[0]);
-
-    return {
-      title: parsed.title || null,
-      document_type: parsed.document_type || null,
-      subjects: Array.isArray(parsed.subjects) ? parsed.subjects : [],
-      keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],
-      summary: parsed.summary || null,
-      page_count: typeof parsed.page_count === 'number' ? parsed.page_count : null
-    };
-  } catch (error) {
-    const err = error as Error;
-    logger.warn(`Failed to parse indexation response: ${err.message}`);
-    return null;
-  }
-}
 
 /**
  * Import Processor class
@@ -198,15 +170,20 @@ class ImportProcessor {
     for (let i = 0; i < pdfsToProcess.length; i++) {
       const pdf = pdfsToProcess[i];
 
-      // Check if PDF needs splitting (> 20MB)
+      // Check if PDF might need splitting (> 1MB = check page count)
       if (needsSplit(pdf.buffer.length)) {
-        logger.info(`[IMPORT] Large PDF detected: ${pdf.filename} (${(pdf.buffer.length / 1024 / 1024).toFixed(1)} MB) - splitting...`);
+        logger.info(`[IMPORT] Checking PDF: ${pdf.filename} (${(pdf.buffer.length / 1024 / 1024).toFixed(1)} MB)...`);
 
         try {
           const splitResult = await splitPdf(pdf.buffer, pdf.filename);
 
-          logger.info(`[IMPORT] Split into ${splitResult.parts.length} parts`);
-          stats.splitParts += splitResult.parts.length;
+          if (!splitResult.wasSplit) {
+            // No split needed, process normally
+            logger.info(`[IMPORT] No split needed for ${pdf.filename}`);
+          } else {
+            logger.info(`[IMPORT] Split into ${splitResult.parts.length} parts`);
+            stats.splitParts += splitResult.parts.length;
+          }
 
           // Process each part
           for (const part of splitResult.parts) {
@@ -393,7 +370,7 @@ class ImportProcessor {
   }
 
   /**
-   * Call the IA Indexation to analyze a document
+   * Call the IA Indexation with separate API calls for each field
    */
   private async callIndexationIA(
     documentUrl: string,
@@ -402,82 +379,134 @@ class ImportProcessor {
     emailBody: string,
     modelLevel: ModelLevel
   ): Promise<IndexationResponse | null> {
+    const { Mistral } = await import('@mistralai/mistralai');
+    const apiKey = process.env.MISTRAL_API_KEY;
+
+    if (!apiKey) {
+      throw new Error('MISTRAL_API_KEY not configured');
+    }
+
+    const client = new Mistral({ apiKey });
+    const model = getModelName(modelLevel);
+
+    // Build context from email body and source path
+    let context = '';
+    if (emailBody && emailBody.trim()) {
+      context += `Contexte: ${emailBody.trim()}\n`;
+    }
+    if (sourcePath) {
+      context += `Chemin: ${sourcePath}\n`;
+    }
+
+    logger.info(`[INDEXATION] Analyzing ${filename} with ${model} (5 API calls)...`);
+
     try {
-      const config = await loadLLMConfig('indexation');
-      const model = getModelName(modelLevel);
+      // 1. Extract title
+      const title = await this.extractField(client, model, 'title', documentUrl, context);
+      await sleep(API_DELAY_MS);
 
-      // Build context from email body and source path
-      let context = '';
-      if (emailBody && emailBody.trim()) {
-        context += `Contexte fourni par l'utilisateur:\n${emailBody.trim()}\n\n`;
-      }
-      if (sourcePath) {
-        context += `Chemin dans l'archive: ${sourcePath}\n\n`;
-      }
+      // 2. Extract document type
+      const documentType = await this.extractField(client, model, 'type', documentUrl, context);
+      await sleep(API_DELAY_MS);
 
-      const prompt = `${context}Analyse ce document PDF et retourne les métadonnées au format JSON suivant:
+      // 3. Extract subjects
+      const subjectsRaw = await this.extractField(client, model, 'subjects', documentUrl, context);
+      const subjects = this.parseJsonArray(subjectsRaw);
+      await sleep(API_DELAY_MS);
 
-{
-  "title": "Titre du document",
-  "document_type": "Type de document (ex: cahier des charges, spécifications, compte-rendu, contrat, documentation technique, etc.)",
-  "subjects": ["Sujet 1", "Sujet 2"],
-  "keywords": ["mot-clé 1", "mot-clé 2", "mot-clé 3"],
-  "summary": "Résumé de 2-3 phrases décrivant le contenu et l'objectif du document",
-  "page_count": 42
-}
+      // 4. Extract keywords
+      const keywordsRaw = await this.extractField(client, model, 'keywords', documentUrl, context);
+      const keywords = this.parseJsonArray(keywordsRaw);
+      await sleep(API_DELAY_MS);
 
-Retourne UNIQUEMENT le JSON, sans texte additionnel.`;
+      // 5. Extract summary
+      const summary = await this.extractField(client, model, 'summary', documentUrl, context);
 
-      // Build message with document
-      const messages: any[] = [];
+      logger.info(`[INDEXATION] Complete: "${title?.substring(0, 50)}..."`);
 
-      if (config.system_prompt) {
-        messages.push({
-          role: 'system',
-          content: config.system_prompt
-        });
-      }
-
-      messages.push({
-        role: 'user',
-        content: [
-          { type: 'text', text: prompt },
-          { type: 'document_url', documentUrl }
-        ]
-      });
-
-      // We need direct access to Mistral client - use a workaround
-      // For now, we'll create a temporary client call
-      const { Mistral } = await import('@mistralai/mistralai');
-      const apiKey = process.env.MISTRAL_API_KEY;
-
-      if (!apiKey) {
-        throw new Error('MISTRAL_API_KEY not configured');
-      }
-
-      const client = new Mistral({ apiKey });
-
-      logger.info(`[INDEXATION] Analyzing ${filename} with ${model}...`);
-
-      const response = await client.chat.complete({
-        model,
-        messages,
-        maxTokens: config.max_output_tokens || 2000,
-        safePrompt: true
-      });
-
-      const content = response.choices?.[0]?.message?.content;
-      if (!content) {
-        throw new Error('Empty response from IA Indexation');
-      }
-
-      const responseText = typeof content === 'string' ? content : JSON.stringify(content);
-
-      return parseIndexationResponse(responseText);
+      return {
+        title: title || filename,
+        document_type: documentType || 'Document',
+        subjects,
+        keywords,
+        summary: summary || '',
+        page_count: 0  // Not extracted via API
+      };
     } catch (error) {
       const err = error as Error;
       logger.error(`[INDEXATION] Failed: ${err.message}`);
       return null;
+    }
+  }
+
+  /**
+   * Extract a single field using specialized config
+   */
+  private async extractField(
+    client: any,
+    model: string,
+    field: 'title' | 'type' | 'subjects' | 'keywords' | 'summary',
+    documentUrl: string,
+    context: string
+  ): Promise<string> {
+    const configName = `indexation-${field}` as 'indexation-title' | 'indexation-type' | 'indexation-subjects' | 'indexation-keywords' | 'indexation-summary';
+    const config = await loadLLMConfig(configName);
+
+    const prompt = context
+      ? `${context}\n\nAnalyse ce document PDF.`
+      : 'Analyse ce document PDF.';
+
+    const messages: any[] = [];
+
+    if (config.system_prompt) {
+      messages.push({
+        role: 'system',
+        content: config.system_prompt
+      });
+    }
+
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: prompt },
+        { type: 'document_url', documentUrl }
+      ]
+    });
+
+    const response = await client.chat.complete({
+      model,
+      messages,
+      maxTokens: config.max_output_tokens || 500,
+      safePrompt: true
+    });
+
+    const content = response.choices?.[0]?.message?.content;
+    if (!content) {
+      logger.warn(`[INDEXATION] Empty response for ${field}`);
+      return '';
+    }
+
+    const result = typeof content === 'string' ? content.trim() : String(content).trim();
+    logger.debug(`[INDEXATION] ${field}: ${result.substring(0, 100)}...`);
+    return result;
+  }
+
+  /**
+   * Parse a JSON array from string, return empty array on failure
+   */
+  private parseJsonArray(str: string): string[] {
+    if (!str) return [];
+    try {
+      // Try to extract JSON array from response
+      const match = str.match(/\[[\s\S]*\]/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        return Array.isArray(parsed) ? parsed : [];
+      }
+      return [];
+    } catch {
+      // If not JSON, split by commas or newlines
+      return str.split(/[,\n]/).map(s => s.trim()).filter(s => s.length > 0);
     }
   }
 }

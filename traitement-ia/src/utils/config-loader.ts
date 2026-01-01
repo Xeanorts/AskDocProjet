@@ -28,7 +28,8 @@ const DEFAULT_CONFIG: LLMConfig = {
 /**
  * Configuration type mapping
  */
-type ConfigType = 'text' | 'pdf' | 'indexation' | 'preselection' | 'reader' | 'compiler';
+type ConfigType = 'text' | 'pdf' | 'indexation' | 'preselection' | 'reader' | 'compiler'
+  | 'indexation-title' | 'indexation-type' | 'indexation-subjects' | 'indexation-keywords' | 'indexation-summary';
 
 const CONFIG_FILES: Record<ConfigType, string> = {
   text: 'llm.json',
@@ -36,7 +37,12 @@ const CONFIG_FILES: Record<ConfigType, string> = {
   indexation: 'llm-indexation.json',
   preselection: 'llm-preselection.json',
   reader: 'llm-reader.json',
-  compiler: 'llm-compiler.json'
+  compiler: 'llm-compiler.json',
+  'indexation-title': 'llm-indexation-title.json',
+  'indexation-type': 'llm-indexation-type.json',
+  'indexation-subjects': 'llm-indexation-subjects.json',
+  'indexation-keywords': 'llm-indexation-keywords.json',
+  'indexation-summary': 'llm-indexation-summary.json'
 };
 
 /**

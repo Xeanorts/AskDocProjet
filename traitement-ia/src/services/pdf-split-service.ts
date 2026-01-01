@@ -6,11 +6,9 @@
 import { PDFDocument } from 'pdf-lib';
 import logger from '../utils/logger.js';
 
-// Size threshold for splitting (20 MB)
-const MAX_SIZE_BYTES = 20 * 1024 * 1024;
-
-// Maximum size we can handle (even with splitting)
-const MAX_SPLITTABLE_SIZE = 200 * 1024 * 1024;  // 200 MB
+// Maximum pages per part (to stay under Mistral's 131k token limit)
+// ~800 tokens per page average for dense documents
+const MAX_PAGES_PER_PART = 100;
 
 export interface SplitPdfPart {
   filename: string;
@@ -30,17 +28,13 @@ export interface SplitResult {
 }
 
 /**
- * Calculate how many parts a PDF should be split into based on size
- * 20-39 MB: 2 parts
- * 40-59 MB: 3 parts
- * 60-79 MB: 4 parts
- * etc.
+ * Calculate how many parts a PDF should be split into based on page count
  */
-function calculatePartCount(sizeBytes: number): number {
-  if (sizeBytes <= MAX_SIZE_BYTES) {
+function calculatePartCount(pageCount: number): number {
+  if (pageCount <= MAX_PAGES_PER_PART) {
     return 1;
   }
-  return Math.ceil(sizeBytes / MAX_SIZE_BYTES);
+  return Math.ceil(pageCount / MAX_PAGES_PER_PART);
 }
 
 /**
@@ -54,23 +48,31 @@ function removeExtension(filename: string): string {
 }
 
 /**
- * Check if a PDF needs to be split based on its size
+ * Check if a PDF might need to be split
+ * Returns true for PDFs > 1MB (will check page count during split)
  */
 export function needsSplit(sizeBytes: number): boolean {
-  return sizeBytes > MAX_SIZE_BYTES;
+  // Check any PDF > 1MB for potential split (based on page count)
+  return sizeBytes > 1 * 1024 * 1024;
 }
 
 /**
  * Split a PDF buffer into multiple parts
  * Returns the original if no split needed, or array of parts
- * Splits by 20 MB chunks, dividing pages evenly
+ * Splits by page count only (max 100 pages per part)
  */
 export async function splitPdf(
   buffer: Buffer,
   filename: string
 ): Promise<SplitResult> {
   const originalSize = buffer.length;
-  const partCount = calculatePartCount(originalSize);
+
+  // Load PDF to get page count
+  const pdfDoc = await PDFDocument.load(buffer);
+  const totalPages = pdfDoc.getPageCount();
+
+  // Calculate parts based on page count
+  const partCount = calculatePartCount(totalPages);
 
   // No split needed
   if (partCount === 1) {
@@ -82,7 +84,7 @@ export async function splitPdf(
         partIndex: 0,
         totalParts: 1,
         pageStart: 1,
-        pageEnd: -1
+        pageEnd: totalPages
       }],
       originalFilename: filename,
       originalSize,
@@ -90,16 +92,7 @@ export async function splitPdf(
     };
   }
 
-  // Check if too large even for splitting
-  if (originalSize > MAX_SPLITTABLE_SIZE) {
-    throw new Error(`PDF too large to split: ${(originalSize / 1024 / 1024).toFixed(1)} MB (max: ${MAX_SPLITTABLE_SIZE / 1024 / 1024} MB)`);
-  }
-
-  // Load PDF to get page count
-  const pdfDoc = await PDFDocument.load(buffer);
-  const totalPages = pdfDoc.getPageCount();
-
-  logger.info(`[PDF-SPLIT] Splitting ${filename} (${(originalSize / 1024 / 1024).toFixed(1)} MB, ${totalPages} pages) into ${partCount} parts`);
+  logger.info(`[PDF-SPLIT] Splitting ${filename} (${totalPages} pages) into ${partCount} parts (max ${MAX_PAGES_PER_PART} pages/part)`);
 
   try {
     // Calculate pages per part (distribute evenly)
@@ -168,8 +161,8 @@ export async function splitPdf(
 }
 
 /**
- * Get size threshold for splitting
+ * Get max pages per part
  */
-export function getSplitThreshold(): number {
-  return MAX_SIZE_BYTES;
+export function getMaxPagesPerPart(): number {
+  return MAX_PAGES_PER_PART;
 }
