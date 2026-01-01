@@ -26,8 +26,8 @@ COPY email-send ./email-send
 # Copy orchestrator
 COPY orchestrator.js ./
 
-# Create storage directories (including PDF cache)
-RUN mkdir -p /app/storage/00_mail_in /app/storage/10_ia_requests /app/storage/11_pdf_cache
+# Create storage directories (including PDF cache and SQLite data)
+RUN mkdir -p /app/storage/00_mail_in /app/storage/10_ia_requests /app/storage/11_pdf_cache /app/data
 
 # Set permissions
 RUN chown -R node:node /app

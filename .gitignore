@@ -7,6 +7,10 @@ config/whitelist.json
 # LLM prompts (customizable per instance, use .example as template)
 traitement-ia/config/llm.json
 traitement-ia/config/llm-pdf.json
+traitement-ia/config/llm-indexation.json
+traitement-ia/config/llm-preselection.json
+traitement-ia/config/llm-reader.json
+traitement-ia/config/llm-compiler.json
 traitement-ia/config/prompts/
 
 # Dependencies
@@ -19,6 +23,11 @@ dist/
 
 # Storage (email data)
 storage/
+
+# Database files
+data/*.db
+data/*.db-wal
+data/*.db-shm
 
 # Logs
 logs/

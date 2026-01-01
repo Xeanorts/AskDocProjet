@@ -11,6 +11,12 @@ import pdfCacheService from './services/pdf-cache-service.js';
 import MistralService from './services/mistral-service.js';
 import conversationThreadService, { PdfAttachment } from './services/conversation-thread-service.js';
 
+// AskDoc imports
+import { initializeDatabase, closeDatabase } from './persistence/database-service.js';
+import { detectFlow, FlowDetectionResult, ModelLevel } from './processors/flow-router.js';
+import { processImport, formatImportConfirmation, ImportResult } from './processors/import-processor.js';
+import { processQuestion, QuestionResult } from './processors/question-processor.js';
+
 dotenv.config();
 
 let processor: EmailAIProcessor | null = null;
@@ -48,11 +54,16 @@ function validateConfiguration(): void {
 
 export async function startProjectName(): Promise<ServiceInstance> {
   try {
-    logger.info('Starting ProjectName...');
+    logger.info('Starting AskDocProjet...');
     logger.info('   Document Q&A via Email with Mistral AI');
     logger.info('');
 
     validateConfiguration();
+
+    // Initialize SQLite database
+    logger.info('Initializing database...');
+    initializeDatabase();
+    logger.info('   Database ready');
 
     logger.info('Configuration:');
     logger.info(`   LLM config: config/llm.json (dynamic reload per email)`);
@@ -107,6 +118,8 @@ export function stopProjectName(): void {
     processor.stop();
     processor = null;
   }
+  // Close database connection
+  closeDatabase();
 }
 
 export const startTraitementIA = startProjectName;
@@ -302,6 +315,147 @@ export async function processEmailData(email: EmailInput): Promise<ProcessingRes
   }
 }
 
+// ============================================================
+// AskDoc API - Import & Question Processing
+// ============================================================
+
+/**
+ * Result of processing an AskDoc email (import or question)
+ */
+export interface AskDocResult {
+  success: boolean;
+  flowType: 'import' | 'question';
+  response: string;
+  error?: string;
+  processingTimeMs?: number;
+  // Import-specific
+  importResult?: ImportResult;
+  // Question-specific
+  questionResult?: QuestionResult;
+}
+
+/**
+ * Process an AskDoc email (import or question)
+ * Detects the flow type from the subject and routes accordingly
+ */
+export async function processAskDocEmail(email: EmailInput): Promise<AskDocResult> {
+  const startTime = Date.now();
+
+  try {
+    const subject = email.subject || '';
+    const flowDetection = detectFlow(subject);
+
+    logger.info(`[AskDoc] Flow detected: ${flowDetection.flowType}, level: ${flowDetection.modelLevel}`);
+
+    if (flowDetection.flowType === 'import') {
+      // Import flow
+      return await processAskDocImport(email, flowDetection.modelLevel, startTime);
+    } else {
+      // Question flow
+      return await processAskDocQuestion(email, flowDetection.modelLevel, startTime);
+    }
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`[AskDoc] Error: ${err.message}`);
+    return {
+      success: false,
+      flowType: 'question',
+      response: 'Une erreur est survenue lors du traitement de votre demande.',
+      error: err.message,
+      processingTimeMs: Date.now() - startTime
+    };
+  }
+}
+
+/**
+ * Process an import email
+ */
+async function processAskDocImport(
+  email: EmailInput,
+  modelLevel: ModelLevel,
+  startTime: number
+): Promise<AskDocResult> {
+  logger.info(`[AskDoc] Processing IMPORT for email ${email.id}`);
+
+  // Extract attachments
+  const attachments = extractPdfAttachments(email);
+
+  // Also check for ZIP files
+  const allAttachments: Array<{ filename: string; buffer: Buffer }> = [];
+
+  if (email.attachments) {
+    for (const att of email.attachments) {
+      if (att.content_base64) {
+        const buffer = tryParseBase64(att.content_base64);
+        if (buffer) {
+          allAttachments.push({
+            filename: att.filename || 'file',
+            buffer
+          });
+        }
+      }
+    }
+  }
+
+  if (allAttachments.length === 0) {
+    return {
+      success: false,
+      flowType: 'import',
+      response: 'Aucune pièce jointe trouvée.\n\nPour importer des documents, joignez un ou plusieurs fichiers PDF ou une archive ZIP.',
+      processingTimeMs: Date.now() - startTime
+    };
+  }
+
+  const emailBody = email.body_text || email.textAsHtml || email.body_html || '';
+
+  const importResult = await processImport(allAttachments, emailBody, modelLevel);
+  const response = formatImportConfirmation(importResult);
+
+  return {
+    success: importResult.success,
+    flowType: 'import',
+    response,
+    importResult,
+    processingTimeMs: Date.now() - startTime
+  };
+}
+
+/**
+ * Process a question email
+ */
+async function processAskDocQuestion(
+  email: EmailInput,
+  modelLevel: ModelLevel,
+  startTime: number
+): Promise<AskDocResult> {
+  logger.info(`[AskDoc] Processing QUESTION for email ${email.id}`);
+
+  const question = email.body_text || email.textAsHtml || email.body_html || '';
+
+  if (!question.trim()) {
+    return {
+      success: false,
+      flowType: 'question',
+      response: 'Votre email ne contient pas de question.\n\nVeuillez formuler votre question dans le corps du message.',
+      processingTimeMs: Date.now() - startTime
+    };
+  }
+
+  const questionResult = await processQuestion(question, modelLevel);
+
+  return {
+    success: questionResult.success,
+    flowType: 'question',
+    response: questionResult.formattedResponse,
+    questionResult,
+    processingTimeMs: Date.now() - startTime
+  };
+}
+
+// ============================================================
+// Legacy API - Kept for backward compatibility
+// ============================================================
+
 /**
  * Run PDF cache cleanup
  * Call this at startup to remove stale cache entries
@@ -355,6 +509,7 @@ export default {
   startTraitementIA,
   stopTraitementIA,
   processEmailData,
+  processAskDocEmail,
   runCacheCleanup,
   runThreadCleanup
 };

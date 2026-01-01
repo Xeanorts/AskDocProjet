@@ -26,11 +26,25 @@ const DEFAULT_CONFIG: LLMConfig = {
 };
 
 /**
- * Load LLM configuration from file
- * @param type - 'text' for emails without PDF, 'pdf' for emails with PDF
+ * Configuration type mapping
  */
-export async function loadLLMConfig(type: 'text' | 'pdf' = 'text'): Promise<LLMConfig> {
-  const configFile = type === 'pdf' ? 'llm-pdf.json' : 'llm.json';
+type ConfigType = 'text' | 'pdf' | 'indexation' | 'preselection' | 'reader' | 'compiler';
+
+const CONFIG_FILES: Record<ConfigType, string> = {
+  text: 'llm.json',
+  pdf: 'llm-pdf.json',
+  indexation: 'llm-indexation.json',
+  preselection: 'llm-preselection.json',
+  reader: 'llm-reader.json',
+  compiler: 'llm-compiler.json'
+};
+
+/**
+ * Load LLM configuration from file
+ * @param type - Configuration type to load
+ */
+export async function loadLLMConfig(type: ConfigType = 'text'): Promise<LLMConfig> {
+  const configFile = CONFIG_FILES[type] || 'llm.json';
   const configPath = join(__dirname, '../../config/', configFile);
 
   try {

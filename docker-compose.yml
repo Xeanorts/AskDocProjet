@@ -32,6 +32,7 @@ services:
       - ./logs:/app/logs
       - ./config:/app/config
       - ./traitement-ia/config:/app/traitement-ia/config
+      - ./data:/app/data
     restart: unless-stopped
     networks:
       - projectname-network

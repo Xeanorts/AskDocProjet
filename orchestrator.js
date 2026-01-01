@@ -16,7 +16,7 @@ dotenv.config();
 
 // Import modules
 import { sendEmail, initEmailService } from './email-send/src/index.js';
-import { processEmailData, runCacheCleanup, runThreadCleanup } from './traitement-ia/dist/index.js';
+import { processAskDocEmail, runCacheCleanup, runThreadCleanup } from './traitement-ia/dist/index.js';
 
 // Configuration
 const STORAGE_PATH = process.env.STORAGE_PATH || './storage';
@@ -245,12 +245,15 @@ async function processEmail(emailPath, whitelist) {
     logger.debug(`✅ Sender whitelisted: ${senderEmail}`);
     logger.debug(`Body preview: ${emailBody.substring(0, 100)}...`);
 
-    // 3. Process with traitement-ia (handles PDFs and text) with TIMEOUT
-    logger.info('Sending to LLM...');
+    // 3. Process with AskDoc (import or question flow) with TIMEOUT
+    const subject = email.subject || '';
+    const isImportFlow = subject.toLowerCase().includes('(add)');
+    logger.info(`Processing as ${isImportFlow ? 'IMPORT' : 'QUESTION'} flow...`);
+
     let aiResult;
     try {
       aiResult = await Promise.race([
-        processEmailData(email),
+        processAskDocEmail(email),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('LLM_TIMEOUT')), LLM_TIMEOUT_MS)
         )
@@ -274,32 +277,24 @@ async function processEmail(emailPath, whitelist) {
     }
 
     if (!aiResult.success) {
-      logger.error(`AI processing failed: ${aiResult.error}`);
+      logger.error(`${aiResult.flowType.toUpperCase()} failed: ${aiResult.error}`);
       // Keep the email file for retry (will be retried next cycle)
       return;
     }
 
     const aiResponse = aiResult.response;
-    logger.info(`AI response received (${aiResponse.length} chars)${aiResult.pdfCount ? ` - ${aiResult.pdfCount} PDF(s) processed` : ''}`);
+    const flowInfo = aiResult.flowType === 'import'
+      ? `${aiResult.importResult?.imported || 0} doc(s) imported`
+      : `${aiResult.questionResult?.documentsAnalyzed || 0} doc(s) analyzed`;
+    logger.info(`${aiResult.flowType.toUpperCase()} completed: ${flowInfo}`);
     logger.debug(`Response preview: ${aiResponse.substring(0, 100)}...`);
 
-    // 4. Get PDF attachments from AI result (includes PDFs from thread history)
-    const pdfAttachments = (aiResult.usedPdfs || []).map(pdf => ({
-      filename: pdf.filename,
-      content_base64: pdf.content_base64
-    }));
-
-    if (pdfAttachments.length > 0) {
-      logger.info(`Including ${pdfAttachments.length} PDF attachment(s) in response`);
-    }
-
-    // 5. Send response email with attachments
+    // 4. Send response email (no PDF attachments for AskDoc flows)
     logger.info(`Sending response email to ${senderEmail}...`);
     const emailResult = await sendEmail(
       senderEmail,
       `Re: ${email.subject || 'Your request'}`,
-      aiResponse,
-      pdfAttachments
+      aiResponse
     );
 
     if (!emailResult.success) {

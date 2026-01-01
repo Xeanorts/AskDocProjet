@@ -1,7 +1,449 @@
-Consulte la doc suivante pour l'utilisation des modèles de Mistral : 
+# AskDocProjet - Spécifications Techniques
+
+## Référence API Mistral
+Consulte la doc suivante pour l'utilisation des modèles de Mistral :
 https://docs.mistral.ai/capabilities/completion/usage
 On utilise dans ce projet le non-streaming du Chat Completion.
 Le programme utilise le Typescript pour faire les requetes à l'API de Mistral
-
-Dans ce projet on utilise pas de préfix, ni de stop flag 
+Dans ce projet on utilise pas de préfix, ni de stop flag
 Le safe_prompt flag doit être utilisé.
+
+---
+
+## 1. Vue d'ensemble du système
+
+### 1.1 Objectif
+Système de questions-réponses sur un corpus de documents PDF projet. L'utilisateur pose une question par email, le système analyse les documents pertinents et retourne une réponse argumentée avec références.
+
+### 1.2 Scope MVP
+- **Un seul projet** : Tous les documents sont dans le même corpus (pas de multi-projets)
+- Pas de suppression/listing de documents via email (hors MVP)
+
+### 1.3 Approche choisie (Non-RAG)
+Plutôt qu'un RAG classique (chunking + embeddings + recherche vectorielle), on utilise une approche multi-agents :
+- **Pré-sélection intelligente** via métadonnées en BDD
+- **IA Lectrices** : analyse ciblée de chaque document pertinent
+- **IA Compilatrice** : synthèse des extractions en réponse finale
+
+---
+
+## 2. Flux d'import des documents
+
+### 2.1 Déclenchement
+Import via email avec `(add)` dans l'objet du mail + pièce(s) jointe(s).
+
+**Formats supportés :**
+- `.pdf` : Document unique
+- `.zip` : Archive contenant plusieurs PDFs (documentation projet complète)
+
+### 2.2 Pipeline d'import
+```
+Email reçu [objet contient "(add)"]
+       │
+       ▼
+┌─────────────────┐
+│ Extraction PJ   │ - Corps du mail (contexte utilisateur)
+│                 │ - Pièce(s) jointe(s)
+└─────────────────┘
+       │
+       ▼
+┌─────────────────┐
+│ Détection type  │
+│                 │
+│ .zip ? ─────────┼──► Décompression récursive
+│                 │    → Liste tous les .pdf (racine + sous-dossiers)
+│                 │
+│ .pdf ? ─────────┼──► Ajout direct à la liste
+└─────────────────┘
+       │
+       ▼ Liste de PDFs à traiter
+┌─────────────────────────────────────────────────────┐
+│ POUR CHAQUE PDF :                                   │
+│                                                     │
+│  ┌─────────────────┐                                │
+│  │ Mistral OCR     │ Upload du PDF → récupère       │
+│  │                 │ file_id                        │
+│  └─────────────────┘                                │
+│         │                                           │
+│         ▼                                           │
+│  ┌─────────────────┐                                │
+│  │ IA Indexation   │ Analyse : contenu PDF          │
+│  │                 │ + corps du mail                │
+│  │                 │ + chemin dans le ZIP           │
+│  └─────────────────┘                                │
+│         │                                           │
+│         ▼                                           │
+│  ┌─────────────────┐                                │
+│  │ Insertion BDD   │ Stockage métadonnées + file_id │
+│  └─────────────────┘                                │
+└─────────────────────────────────────────────────────┘
+       │
+       ▼
+Email confirmation (récap de tous les docs importés)
+```
+
+### 2.3 Structure de la table `documents`
+| Champ | Type | Description |
+|-------|------|-------------|
+| id | UUID | Identifiant unique interne |
+| mistral_file_id | string | ID retourné par Mistral OCR |
+| filename | string | Nom du fichier PDF original |
+| source_path | string | Chemin dans le ZIP (ex: "specs/architecture/") ou null si PDF direct |
+| title | string | Titre du document (extrait par IA) |
+| document_type | string | Type de document (détecté par IA) |
+| subjects | string[] | Sujets/thématiques abordés |
+| keywords | string[] | Mots-clés extraits |
+| summary | text | Résumé court du document |
+| page_count | int | Nombre de pages |
+| created_at | datetime | Date d'ajout |
+
+**Note :** Le `source_path` peut aider l'IA à qualifier le document (ex: un PDF dans "contrats/" est probablement un contrat).
+
+### 2.4 IA Indexation
+
+**Entrée :**
+- Contenu du document (via Mistral OCR)
+- Corps du mail (contexte fourni par l'utilisateur)
+- Chemin source (si ZIP : chemin du dossier dans l'archive)
+
+**Sortie JSON :**
+```json
+{
+  "title": "Titre extrait ou déduit du document",
+  "document_type": "Type identifié (cahier des charges, spec, CR, contrat...)",
+  "subjects": ["Sujet 1", "Sujet 2", "..."],
+  "keywords": ["mot-clé 1", "mot-clé 2", "..."],
+  "summary": "Résumé de 2-3 phrases décrivant le contenu et l'objectif du document",
+  "page_count": 42
+}
+```
+
+**Note :** Le corps du mail peut enrichir l'analyse. Ex: "Version finale validée" → l'IA peut ajouter "version finale" dans les keywords.
+
+### 2.5 Génération des métadonnées
+**Mode automatique** : L'IA Indexation analyse le document et génère toutes les métadonnées sans intervention manuelle.
+
+### 2.6 Détection des doublons
+Réutilise le mécanisme existant du template : **Hash SHA256 du contenu PDF**.
+- Fichier : `traitement-ia/src/services/conversation-thread-service.ts`
+- Si le hash existe déjà en BDD → document considéré comme doublon
+
+### 2.7 Limites de taille (existantes)
+Réutilise les limites du template :
+- **Par PDF** : 20 MB maximum
+- **Total par email** : 20 MB maximum
+- **Nombre de PDFs** : 10 maximum par email
+- Les PDFs hors limites sont marqués en erreur (comptabilisés dans "Erreurs" du récap ZIP)
+
+### 2.8 Délai entre appels API
+Pour éviter le rate limiting Mistral :
+- Traitement séquentiel des documents (1 par 1)
+- **1 seconde de délai** entre chaque appel API
+
+---
+
+## 3. Phase de pré-sélection des documents
+
+### 3.1 Critères de sélection
+Comment l'IA détermine quels documents lire pour une question donnée ?
+
+**Stratégie :**
+L'IA de pré-sélection analyse la question et les métadonnées de tous les documents pour déterminer lesquels sont pertinents.
+
+- **Limite max de documents** : Aucune pour l'instant (à ajuster après tests)
+
+### 3.2 IA de pré-sélection
+- **Entrée** : Question utilisateur + liste métadonnées de tous les documents
+- **Sortie** : JSON structuré
+- **Modèle** : Selon niveau (standard: `mistral-small`, pro: `mistral-medium`, max: `mistral-large`)
+
+**Schéma JSON de sortie :**
+```json
+{
+  "selected_documents": [
+    {
+      "document_id": "uuid-du-doc",
+      "reason": "Pourquoi ce document est pertinent pour la question"
+    }
+  ],
+  "no_relevant_docs": false
+}
+```
+
+---
+
+## 4. IA Lectrices
+
+### 4.1 Fonctionnement
+Chaque document sélectionné est analysé par une instance d'IA lectrice.
+
+**Entrée :**
+- La question utilisateur
+- Le contenu du document (via Mistral OCR)
+
+**Sortie (format structuré) :**
+```json
+{
+  "document_id": "uuid",
+  "relevant": true/false,
+  "confidence": 0.0-1.0,
+  "extractions": [
+    {
+      "content": "Information extraite pertinente",
+      "page": 12,
+      "section": "3.2 Architecture",
+      "relevance_to_question": "Explication du lien avec la question"
+    }
+  ],
+  "summary": "Résumé de ce que ce document apporte à la question"
+}
+```
+
+### 4.2 Paramètres
+- **Modèle** : Selon niveau (standard: `mistral-small`, pro: `mistral-medium`, max: `mistral-large`)
+- **Exécution** : Parallèle (avec gestion des rate limits)
+- **Timeout par document** : 60 secondes
+
+---
+
+## 5. IA Compilatrice
+
+### 5.1 Fonctionnement
+Synthétise toutes les extractions des lectrices en une réponse cohérente.
+
+**Entrée :**
+- La question utilisateur
+- Toutes les extractions des IA lectrices (tableau JSON)
+
+**Sortie :** JSON structuré
+
+**Schéma JSON de sortie :**
+```json
+{
+  "answer": "Réponse détaillée et argumentée...",
+  "sources": [
+    {
+      "document_title": "Cahier des charges v2",
+      "page": 12,
+      "quote": "Citation exacte du document"
+    }
+  ],
+  "confidence": 0.85,
+  "documents_analyzed": 3
+}
+```
+
+### 5.2 Format email final (généré par l'orchestrateur)
+L'orchestrateur transforme le JSON en email lisible :
+```
+[Réponse détaillée et argumentée]
+
+---
+Sources :
+- Cahier des charges v2, page 12 : "citation"
+- Spécifications techniques, page 5 : "citation"
+
+Confiance : 85%
+Documents analysés : 3
+```
+
+### 5.3 Paramètres
+- **Modèle** : Selon niveau (standard: `mistral-small`, pro: `mistral-medium`, max: `mistral-large`)
+
+---
+
+## 6. Rôle de l'orchestrateur
+
+L'orchestrateur (code TypeScript) gère le flux entre les IA. Chaque IA retourne du JSON structuré, l'orchestrateur parse et transmet à l'étape suivante.
+
+```
+┌────────────────┐
+│  Orchestrateur │
+└───────┬────────┘
+        │
+        │ 1. Récupère métadonnées docs depuis SQLite
+        │
+        ▼
+┌────────────────┐      JSON: { selected_documents: [...] }
+│ IA Pré-sélect. │ ──────────────────────────────────────────┐
+└────────────────┘                                           │
+        ▲                                                    │
+        │ Question + métadonnées                             │
+        │                                                    ▼
+┌───────┴────────┐                                   ┌───────────────┐
+│  Orchestrateur │ ◄──── Parse JSON, récupère IDs ───│   Parse JSON  │
+└───────┬────────┘                                   └───────────────┘
+        │
+        │ 2. Pour chaque doc_id: appel Mistral OCR + IA Lectrice
+        │
+        ▼
+┌────────────────┐      JSON: { extractions: [...], summary: "..." }
+│  IA Lectrice 1 │ ──────────────────────────────────────────┐
+├────────────────┤      JSON: { extractions: [...], summary: "..." }
+│  IA Lectrice 2 │ ──────────────────────────────────────────┤
+├────────────────┤      ...                                  │
+│  IA Lectrice N │ ──────────────────────────────────────────┤
+└────────────────┘                                           │
+        ▲                                                    ▼
+        │ Question + contenu doc                     ┌───────────────┐
+        │                                            │ Agrège tous   │
+┌───────┴────────┐                                   │ les JSON      │
+│  Orchestrateur │ ◄─────────────────────────────────└───────────────┘
+└───────┬────────┘
+        │
+        │ 3. Envoie question + toutes extractions agrégées
+        │
+        ▼
+┌────────────────┐      JSON: { answer: "...", sources: [...] }
+│ IA Compilatrice│ ──────────────────────────────────────────┐
+└────────────────┘                                           │
+        ▲                                                    ▼
+        │                                            ┌───────────────┐
+┌───────┴────────┐                                   │   Parse JSON  │
+│  Orchestrateur │ ◄─────────────────────────────────└───────────────┘
+└───────┬────────┘
+        │
+        │ 4. Formate en email lisible et envoie
+        │
+        ▼
+    [Email envoyé]
+```
+
+---
+
+## 7. Pipeline complet
+
+```
+Email reçu (question)
+       │
+       ▼
+┌─────────────────┐
+│ Extraction      │
+│ question        │
+└─────────────────┘
+       │
+       ▼
+┌─────────────────┐
+│ IA Pré-sélection│ ◄── BDD métadonnées
+│ (choix docs)    │
+└─────────────────┘
+       │
+       ▼ Liste docs pertinents
+┌─────────────────┐
+│ Mistral OCR     │ Lecture des PDFs sélectionnés
+└─────────────────┘
+       │
+       ▼ Contenus textuels
+┌─────────────────┐
+│ IA Lectrices    │ N instances (1 par doc)
+│ (extraction)    │
+└─────────────────┘
+       │
+       ▼ Extractions structurées
+┌─────────────────┐
+│ IA Compilatrice │
+│ (synthèse)      │
+└─────────────────┘
+       │
+       ▼
+Email réponse envoyé
+```
+
+---
+
+## 7. Choix techniques
+
+### 7.1 Base de données
+**SQLite** - Base de données locale, fichier unique, simple à gérer.
+
+Fichier : `data/askdoc.db`
+
+### 7.2 Stockage des documents
+Les PDFs sont stockés chez Mistral via leur API OCR. On conserve uniquement le `mistral_file_id` en BDD.
+Le file_id n'a pas de durée de vie limitée dans ce projet.
+
+### 7.3 Gestion multi-PDF
+Si un email `(add)` contient plusieurs pièces jointes PDF, chaque PDF est traité individuellement (séquentiellement).
+
+---
+
+## 8. Système de niveaux de modèles
+
+### 8.1 Concept
+Trois niveaux de qualité/coût pour les traitements IA :
+
+| Niveau | Suffixe objet | Modèle | Usage |
+|--------|---------------|--------|-------|
+| **Standard** | (aucun) | `mistral-small` | Par défaut |
+| **Pro** | `(pro)` | `mistral-medium` | Meilleure qualité |
+| **Max** | `(max)` | `mistral-large` | Qualité maximale |
+
+### 8.2 Application
+Le niveau s'applique à **toutes les IA du pipeline** pour une requête donnée :
+- IA Pré-sélection
+- IA Lectrices
+- IA Compilatrice
+
+### 8.3 Exemples d'objets email
+- `Quelle est la date de livraison prévue ?` → Standard (mistral-small)
+- `(pro) Quelle est la date de livraison prévue ?` → Pro (mistral-medium)
+- `(max) Quelle est la date de livraison prévue ?` → Max (mistral-large)
+- `(add) Cahier des charges v2` → Import standard
+- `(add)(pro) Cahier des charges v2` → Import avec analyse pro
+
+---
+
+## 9. Email de confirmation (Import)
+
+### 9.1 Confirmation - PDF unique
+```
+✓ Document importé avec succès
+
+Fichier : cahier_des_charges_v2.pdf
+Titre : Cahier des charges - Projet X
+Type : Cahier des charges
+Sujets : Architecture, Planning, Budget
+Résumé : Document définissant les exigences fonctionnelles et techniques du projet X...
+
+---
+⚠️ Note : Un document avec ce nom existait déjà et a été mis à jour.
+```
+
+### 9.2 Confirmation - Archive ZIP
+Format allégé (pas de liste détaillée) :
+```
+✓ Import terminé
+
+Archive : documentation-projet-alpha.zip
+
+📄 Documents importés : 12
+⏭️ Fichiers ignorés : 5 (formats non supportés)
+❌ Erreurs : 2 (PDF trop volumineux ou illisibles)
+
+---
+⚠️ 3 documents existaient déjà et ont été mis à jour.
+```
+
+### 9.3 Contenu selon le type
+| Type PJ | Détail des docs | Statistiques |
+|---------|-----------------|--------------|
+| PDF unique | Oui (titre, type, sujets, résumé) | Non |
+| ZIP | Non (trop lourd) | Oui (compteurs) |
+
+---
+
+## 10. Gestion des erreurs
+
+### 10.1 Import
+| Erreur | Comportement |
+|--------|--------------|
+| PDF illisible | Email d'erreur avec raison |
+| OCR échoue | Retry 1x, puis email d'erreur |
+| Pas de PJ PDF | Email d'erreur "Aucun PDF trouvé" |
+
+### 10.2 Question
+| Erreur | Comportement |
+|--------|--------------|
+| Aucun document en BDD | Email "Aucun document dans la base" |
+| Aucun document pertinent | Email "Aucun document ne semble traiter de ce sujet" |
+| Erreur IA | Retry 1x, puis email d'erreur générique |
