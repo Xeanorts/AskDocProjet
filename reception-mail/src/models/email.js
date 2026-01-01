@@ -5,9 +5,17 @@
 
 import { randomUUID } from 'crypto';
 
-// PDF size limits to prevent OOM
-const MAX_PDF_SIZE_BYTES = 20 * 1024 * 1024;  // 20MB per PDF
-const MAX_TOTAL_SIZE_BYTES = 20 * 1024 * 1024; // 20MB total
+// Attachment size limits to prevent OOM
+const MAX_ATTACHMENT_SIZE_BYTES = 50 * 1024 * 1024;  // 50MB per attachment
+const MAX_TOTAL_SIZE_BYTES = 50 * 1024 * 1024; // 50MB total
+
+// Content types that should include base64 content
+const INCLUDE_CONTENT_TYPES = [
+  'application/pdf',
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-zip'
+];
 
 /**
  * Create an Email model from parsed email data
@@ -119,25 +127,25 @@ export class Email {
         hasContent: !!att.content
       };
 
-      // Include base64 content for PDF files (needed for Document Q&A)
+      // Include base64 content for PDF and ZIP files (needed for Document Q&A)
       // Enforce size limits to prevent OOM
-      if (att.content && att.contentType === 'application/pdf') {
-        const pdfSize = att.size || att.content.length;
+      if (att.content && INCLUDE_CONTENT_TYPES.includes(att.contentType)) {
+        const attSize = att.size || att.content.length;
 
-        if (pdfSize > MAX_PDF_SIZE_BYTES) {
-          // Single PDF too large
+        if (attSize > MAX_ATTACHMENT_SIZE_BYTES) {
+          // Single attachment too large
           attachment.skipped_reason = 'size_exceeded';
-          attachment.skipped_details = `PDF size ${Math.round(pdfSize / 1024 / 1024)}MB exceeds limit of ${MAX_PDF_SIZE_BYTES / 1024 / 1024}MB`;
-          console.warn(`[EMAIL] PDF too large: ${att.filename} (${Math.round(pdfSize / 1024 / 1024)}MB > ${MAX_PDF_SIZE_BYTES / 1024 / 1024}MB)`);
-        } else if (totalPdfSize + pdfSize > MAX_TOTAL_SIZE_BYTES) {
+          attachment.skipped_details = `Attachment size ${Math.round(attSize / 1024 / 1024)}MB exceeds limit of ${MAX_ATTACHMENT_SIZE_BYTES / 1024 / 1024}MB`;
+          console.warn(`[EMAIL] Attachment too large: ${att.filename} (${Math.round(attSize / 1024 / 1024)}MB > ${MAX_ATTACHMENT_SIZE_BYTES / 1024 / 1024}MB)`);
+        } else if (totalPdfSize + attSize > MAX_TOTAL_SIZE_BYTES) {
           // Total size would exceed limit
           attachment.skipped_reason = 'total_size_exceeded';
-          attachment.skipped_details = `Total PDF size would exceed ${MAX_TOTAL_SIZE_BYTES / 1024 / 1024}MB limit`;
+          attachment.skipped_details = `Total attachment size would exceed ${MAX_TOTAL_SIZE_BYTES / 1024 / 1024}MB limit`;
           console.warn(`[EMAIL] Total attachments exceeded: skipping ${att.filename}`);
         } else {
           // Within limits, include content
           attachment.content_base64 = att.content.toString('base64');
-          totalPdfSize += pdfSize;
+          totalPdfSize += attSize;
         }
       }
 

@@ -6,6 +6,7 @@
 import Database from 'better-sqlite3';
 import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
+import { randomUUID } from 'crypto';
 import logger from '../utils/logger.js';
 
 // Document metadata interface
@@ -161,7 +162,7 @@ class DatabaseService {
   insertDocument(doc: DocumentInsert): DocumentMetadata {
     if (!this.db) throw new Error('Database not initialized');
 
-    const id = crypto.randomUUID();
+    const id = randomUUID();
     const now = new Date().toISOString();
 
     const stmt = this.db.prepare(`

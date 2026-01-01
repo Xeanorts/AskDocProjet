@@ -338,8 +338,18 @@ export interface AskDocResult {
  * Process an AskDoc email (import or question)
  * Detects the flow type from the subject and routes accordingly
  */
+// Track if database has been initialized for AskDoc
+let askDocDbInitialized = false;
+
 export async function processAskDocEmail(email: EmailInput): Promise<AskDocResult> {
   const startTime = Date.now();
+
+  // Lazy initialize database if not already done
+  if (!askDocDbInitialized) {
+    logger.info('[AskDoc] Initializing database...');
+    initializeDatabase();
+    askDocDbInitialized = true;
+  }
 
   try {
     const subject = email.subject || '';
