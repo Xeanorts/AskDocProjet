@@ -1,0 +1,40 @@
+# Environment variables (contains sensitive data)
+.env
+
+# Whitelist configuration (may contain sensitive email addresses)
+config/whitelist.json
+
+# LLM prompts (customizable per instance, use .example as template)
+traitement-ia/config/llm.json
+traitement-ia/config/llm-pdf.json
+traitement-ia/config/prompts/
+
+# Dependencies
+node_modules/
+*/node_modules/
+
+# TypeScript compiled output
+dist/
+*/dist/
+
+# Storage (email data)
+storage/
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+.cache/

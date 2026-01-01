@@ -1,0 +1,30 @@
+{
+  "name": "projectname",
+  "version": "1.0.0",
+  "description": "Project Name - AI-powered email processing system",
+  "type": "module",
+  "main": "orchestrator.js",
+  "scripts": {
+    "postinstall": "echo 'Dependencies installed. Use Docker commands to run the project.'"
+  },
+  "keywords": [
+    "email",
+    "ai",
+    "llm",
+    "automation",
+    "imap",
+    "smtp"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "imap": "^0.8.19",
+    "mailparser": "^3.7.1",
+    "nodemailer": "^6.9.7",
+    "openai": "^4.80.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

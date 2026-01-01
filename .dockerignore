@@ -1,0 +1,40 @@
+# Dependencies (installed in container)
+node_modules
+**/node_modules
+
+# Build outputs (rebuilt in container)
+traitement-ia/dist
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Logs and storage (mounted as volumes)
+logs
+storage
+*.log
+
+# Environment (loaded separately)
+.env
+.env.*
+!.env.example
+
+# Documentation
+*.md
+!README.md
+docs
+
+# Docker files (not needed in image)
+docker-compose*.yml
+Dockerfile*
+
+# Misc
+.DS_Store
+*.bak
+*.tmp

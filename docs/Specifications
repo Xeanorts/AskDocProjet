@@ -1,0 +1,7 @@
+Consulte la doc suivante pour l'utilisation des modèles de Mistral : 
+https://docs.mistral.ai/capabilities/completion/usage
+On utilise dans ce projet le non-streaming du Chat Completion.
+Le programme utilise le Typescript pour faire les requetes à l'API de Mistral
+
+Dans ce projet on utilise pas de préfix, ni de stop flag 
+Le safe_prompt flag doit être utilisé.

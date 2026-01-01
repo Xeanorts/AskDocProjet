@@ -1,0 +1,97 @@
+# Project Name - Guide Utilisateur
+
+## Presentation
+
+Project Name vous permet de poser des questions sur vos documents PDF par email. Envoyez un email avec vos PDFs en piece jointe, posez votre question, et recevez une reponse detaillee par email.
+
+## Comment utiliser le service
+
+### 1. Preparer votre email
+
+- **Destinataire** : Envoyez votre email a l'adresse qui vous a ete communiquee
+- **Objet** : Libre (ex: "Question sur le rapport annuel")
+- **Corps du message** : Ecrivez votre question clairement
+- **Pieces jointes** : Attachez un ou plusieurs fichiers PDF
+
+### 2. Rediger votre question
+
+Soyez precis dans votre question. Exemples :
+
+- "Quel est le chiffre d'affaires du troisieme trimestre ?"
+- "Resume les points cles de ce document"
+- "Compare les resultats entre les deux rapports"
+- "Quelles sont les recommandations mentionnees ?"
+
+### 3. Recevoir la reponse
+
+Vous recevrez une reponse par email contenant l'analyse de vos documents basee sur votre question.
+
+## Limites du service
+
+| Limite | Valeur |
+|--------|--------|
+| Taille maximale par PDF | 15 Mo |
+| Taille totale des PDFs | 15 Mo |
+| Nombre maximum de PDFs | 10 fichiers |
+| Pages maximum par PDF | 1000 pages |
+
+## Conseils pour de meilleurs resultats
+
+- **Questions claires** : Plus votre question est precise, meilleure sera la reponse
+- **PDFs lisibles** : Utilisez des PDFs avec du texte selectionnable (pas des scans d'images)
+- **Un sujet par email** : Pour des questions sur differents sujets, envoyez des emails separes
+- **Langue** : Le service repond dans la meme langue que votre question
+
+## Exemples d'utilisation
+
+### Exemple 1 : Question simple (1 PDF)
+
+**Email envoye :**
+```
+Objet : Question rapport financier
+Piece jointe : rapport-Q3-2024.pdf
+
+Quel est le benefice net du Q3 2024 et comment se compare-t-il au Q3 2023 ?
+```
+
+**Reponse recue :**
+```
+D'apres le rapport Q3 2024, le benefice net s'eleve a 2.4M EUR,
+en hausse de 12% par rapport au Q3 2023 (2.14M EUR)...
+```
+
+### Exemple 2 : Comparaison (plusieurs PDFs)
+
+**Email envoye :**
+```
+Objet : Comparaison rapports
+Pieces jointes : rapport-2023.pdf, rapport-2024.pdf
+
+Compare l'evolution des ventes entre 2023 et 2024.
+```
+
+**Reponse recue :**
+```
+En comparant les deux rapports :
+- Ventes 2023 : 5.2M EUR
+- Ventes 2024 : 6.1M EUR
+- Evolution : +17.3%
+Les principaux facteurs de croissance sont...
+```
+
+## En cas de probleme
+
+Si vous recevez un message d'erreur :
+
+- **PDF trop volumineux** : Reduisez la taille de vos fichiers (compression, moins de pages)
+- **Trop de PDFs** : Limitez-vous a 10 fichiers maximum
+- **Format non supporte** : Verifiez que vos fichiers sont bien au format PDF
+- **Pas de reponse** : Verifiez que votre email contenait bien une question dans le corps du message
+
+## Confidentialite
+
+Vos documents sont traites de maniere confidentielle et ne sont pas conserves apres analyse.
+
+---
+
+*Pour toute question sur l'utilisation du service, contactez votre administrateur.*

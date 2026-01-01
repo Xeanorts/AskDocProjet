@@ -1,0 +1,10 @@
+{
+  "allowed_emails": [
+    "user@example.com",
+    "admin@company.com"
+  ],
+  "allowed_domains": [
+    "@your-company.com",
+    "@trusted-client.fr"
+  ]
+}

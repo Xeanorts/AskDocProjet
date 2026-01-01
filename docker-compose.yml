@@ -1,0 +1,52 @@
+services:
+  # Service de réception des emails (IMAP)
+  reception-mail:
+    build:
+      context: ./reception-mail
+      dockerfile: docker/nodejs/Dockerfile
+    container_name: projectname-reception
+    env_file:
+      - .env
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - projectname-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Service principal - Orchestrator
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: projectname-orchestrator
+    env_file:
+      - .env
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+      - ./config:/app/config
+      - ./traitement-ia/config:/app/traitement-ia/config
+    restart: unless-stopped
+    networks:
+      - projectname-network
+    depends_on:
+      - reception-mail
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  projectname-network:
+    driver: bridge
+
+volumes:
+  storage:
+  logs:
