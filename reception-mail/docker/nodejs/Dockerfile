@@ -34,9 +34,8 @@ ENV NODE_ENV=production \
     SMTP_PORT=2525 \
     API_PORT=3000
 
-# Créer un utilisateur non-root pour la sécurité
-RUN addgroup -g 1001 mailapp && \
-    adduser -D -u 1001 -G mailapp mailapp
+# Use standard node user (UID 1000) for consistency with orchestrator
+# This ensures files created by this container can be accessed by orchestrator
 
 # Copier les fichiers de dépendances
 COPY package*.json ./
@@ -51,10 +50,10 @@ COPY --from=builder /app/src ./src
 
 # Créer les répertoires nécessaires avec les bonnes permissions
 RUN mkdir -p /app/storage/emails /app/storage/attachments /app/logs && \
-    chown -R mailapp:mailapp /app
+    chown -R node:node /app
 
-# Passer à l'utilisateur non-root
-USER mailapp
+# Switch to non-root user (same as orchestrator for permission consistency)
+USER node
 
 # Exposer les ports SMTP et API
 EXPOSE 2525 3000

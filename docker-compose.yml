@@ -1,4 +1,22 @@
 services:
+  # Init container to fix permissions on shared volumes
+  init-permissions:
+    image: alpine:latest
+    container_name: projectname-init
+    user: root
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+      - ./data:/app/data
+    command: >
+      sh -c "
+        mkdir -p /app/storage/00_mail_in /app/storage/10_ia_requests /app/storage/11_pdf_cache /app/storage/12_conversation_threads /app/storage/quarantine /app/logs /app/data &&
+        chmod -R 777 /app/storage /app/logs /app/data &&
+        echo 'Permissions initialized'
+      "
+    networks:
+      - projectname-network
+
   # Service de réception des emails (IMAP)
   reception-mail:
     build:
@@ -13,6 +31,9 @@ services:
     restart: unless-stopped
     networks:
       - projectname-network
+    depends_on:
+      init-permissions:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "node", "-e", "process.exit(0)"]
       interval: 30s
@@ -37,7 +58,10 @@ services:
     networks:
       - projectname-network
     depends_on:
-      - reception-mail
+      init-permissions:
+        condition: service_completed_successfully
+      reception-mail:
+        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "process.exit(0)"]
       interval: 30s
